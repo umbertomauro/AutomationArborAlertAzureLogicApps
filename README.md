@@ -1,3 +1,7 @@
+
+![LogicApp](https://github.com/user-attachments/assets/12f00dfe-1c21-4a46-a832-870ba8ae34ce)
+
+
 🔹 Automating alert management with Azure Logic Apps 🔹
 I have just completed development of my first Logic App on Azure, a workflow that automates the management of alerts received via email and integration with Azure Sentinel for creating security incidents.
 
