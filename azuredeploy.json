@@ -1,0 +1,311 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_a_new_email_arrives_(V3)": {
+                "splitOn": "@triggerBody()?['value']",
+                "type": "ApiConnectionNotification",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['office365']['connectionId']"
+                        }
+                    },
+                    "fetch": {
+                        "pathTemplate": {
+                            "template": "/v3/Mail/OnNewEmail"
+                        },
+                        "method": "get",
+                        "queries": {
+                            "importance": "Any",
+                            "fetchOnlyWithAttachment": false,
+                            "includeAttachments": false,
+                            "folderPath": "Inbox"
+                        }
+                    },
+                    "subscribe": {
+                        "body": {
+                            "NotificationUrl": "@listCallbackUrl()"
+                        },
+                        "pathTemplate": {
+                            "template": "/GraphMailSubscriptionPoke/$subscriptions"
+                        },
+                        "method": "post",
+                        "queries": {
+                            "importance": "Any",
+                            "fetchOnlyWithAttachment": false,
+                            "folderPath": "Inbox"
+                        }
+                    }
+                }
+            }
+        },
+        "actions": {
+            "Is_this_done_email": {
+                "actions": {},
+                "runAfter": {},
+                "else": {
+                    "actions": {
+                        "Delay": {
+                            "type": "Wait",
+                            "inputs": {
+                                "interval": {
+                                    "count": 9,
+                                    "unit": "Minute"
+                                }
+                            }
+                        },
+                        "Get_emails_(V3)": {
+                            "runAfter": {
+                                "Delay": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "type": "ApiConnection",
+                            "inputs": {
+                                "host": {
+                                    "connection": {
+                                        "name": "@parameters('$connections')['office365']['connectionId']"
+                                    }
+                                },
+                                "method": "get",
+                                "path": "/v3/Mail",
+                                "queries": {
+                                    "importance": "Any",
+                                    "fetchOnlyWithAttachment": false,
+                                    "folderPath": "Inbox",
+                                    "fetchOnlyUnread": false,
+                                    "fetchOnlyFlagged": false,
+                                    "includeAttachments": false,
+                                    "searchQuery": "@encodeUriComponent(concat(triggerBody()?['subject'], ' done'))",
+                                    "top": 10
+                                }
+                            }
+                        },
+                        "Does_done_email_exist": {
+                            "actions": {
+                                "For_each": {
+                                    "foreach": "@body('Get_emails_(V3)')?['value']",
+                                    "actions": {
+                                        "Check_valid_matches": {
+                                            "actions": {
+                                                "Compose_1": {
+                                                    "type": "Compose",
+                                                    "inputs": "@item()?['body']"
+                                                },
+                                                "Create_incident_1": {
+                                                    "runAfter": {
+                                                        "Html_to_text_1": [
+                                                            "Succeeded"
+                                                        ]
+                                                    },
+                                                    "type": "ApiConnection",
+                                                    "inputs": {
+                                                        "host": {
+                                                            "connection": {
+                                                                "name": "@parameters('$connections')['azuresentinel-1']['connectionId']"
+                                                            }
+                                                        },
+                                                        "method": "put",
+                                                        "body": {
+                                                            "title": "New Arbor Alert received by email - #@{substring(triggerOutputs()?['body/subject'], add(indexOf(triggerOutputs()?['body/subject'], '#'), 1), 8)} ",
+                                                            "severity": "High",
+                                                            "status": "New",
+                                                            "description": "@{outputs('Convert_Html_to_Text_2')}",
+                                                            "tagsToAdd": {
+                                                                "TagsToAdd": "[\n  {\n    \"Tag\": \"Host: @{trim(split(split(body('Html_to_text_1'), 'Host:')[1], 'Signatures:')[0])}\"\n  },\n  {\n    \"Tag\": \"Signature: @{trim(split(split(body('Html_to_text_1'), 'Signatures:')[1], 'Impact:')[0])\r\n }\"\n  },\n  {\n    \"Tag\": \"Impact: @{trim(split(split(body('Html_to_text_1'), 'Impact:')[1], 'Importance:')[0])}\"\n  },\n  {\n    \"Tag\": \"Managed Object: @{replace(split(body('Html_to_text_1'), 'Managed Objects:')[1], '\"', '')}\"\n  }\n]"
+                                                            }
+                                                        },
+                                                        "path": "/Incidents/subscriptions/@{encodeURIComponent('YOUR_SUBSCRIPTION')}/resourceGroups/@{encodeURIComponent('YOUR_RESOURCEGROUP')}/workspaces/@{encodeURIComponent('YOUR_WORKSPACE')}"
+                                                    }
+                                                },
+                                                "Convert_Html_to_Text_2": {
+                                                    "runAfter": {
+                                                        "Compose_1": [
+                                                            "Succeeded"
+                                                        ]
+                                                    },
+                                                    "type": "Compose",
+                                                    "inputs": "@replace(replace(outputs('Compose_1'), '<[^>]*>', ''), '&nbsp;', ' ')"
+                                                },
+                                                "Html_to_text_1": {
+                                                    "runAfter": {
+                                                        "Convert_Html_to_Text_2": [
+                                                            "Succeeded"
+                                                        ]
+                                                    },
+                                                    "type": "ApiConnection",
+                                                    "inputs": {
+                                                        "host": {
+                                                            "connection": {
+                                                                "name": "@parameters('$connections')['conversionservice']['connectionId']"
+                                                            }
+                                                        },
+                                                        "method": "post",
+                                                        "body": "<p class=\"editor-paragraph\">@{triggerBody()?['body']}</p>",
+                                                        "path": "/html2text"
+                                                    }
+                                                }
+                                            },
+                                            "else": {
+                                                "actions": {}
+                                            },
+                                            "expression": {
+                                                "and": [
+                                                    {
+                                                        "greaterOrEquals": [
+                                                            "@div(sub(ticks(item()?['receivedDateTime']), ticks(triggerBody()?['receivedDateTime'])), 600000000)",
+                                                            2
+                                                        ]
+                                                    }
+                                                ]
+                                            },
+                                            "type": "If",
+                                            "description": "Check item is email without done and also check trigger email and get corresponding email is more than 8 minutes"
+                                        }
+                                    },
+                                    "type": "Foreach"
+                                }
+                            },
+                            "runAfter": {
+                                "Get_emails_(V3)": [
+                                    "Succeeded"
+                                ]
+                            },
+                            "else": {
+                                "actions": {
+                                    "Convert_Html_To_Text": {
+                                        "runAfter": {
+                                            "Compose": [
+                                                "Succeeded"
+                                            ]
+                                        },
+                                        "type": "Compose",
+                                        "inputs": "@{replace(replace(outputs('Compose'), '<[^>]*>', ''), '&nbsp;', ' ')}"
+                                    },
+                                    "Create_incident": {
+                                        "runAfter": {
+                                            "Html_to_text": [
+                                                "Succeeded"
+                                            ]
+                                        },
+                                        "type": "ApiConnection",
+                                        "inputs": {
+                                            "host": {
+                                                "connection": {
+                                                    "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                                }
+                                            },
+                                            "method": "put",
+                                            "body": {
+                                                "title": "New Arbor Alert received by email - #@{substring(triggerOutputs()?['body/subject'], add(indexOf(triggerOutputs()?['body/subject'], '#'), 1), 8)} ",
+                                                "severity": "High",
+                                                "status": "New",
+                                                "description": "@{outputs('Convert_Html_To_Text')}",
+                                                "ownerAction": "Unassign",
+                                                "tagsToAdd": {
+                                                    "TagsToAdd": "[\n  {\n    \"Tag\": \"Host: @{trim(split(split(body('Html_to_text'), 'Host:')[1], 'Signatures:')[0])}\"\n  },\n  {\n    \"Tag\": \"Signature: @{trim(split(split(body('Html_to_text'), 'Signatures:')[1], 'Impact:')[0])\r\n }\"\n  },\n  {\n    \"Tag\": \"Impact: @{trim(split(split(body('Html_to_text'), 'Impact:')[1], 'Importance:')[0])}\"\n  },\n  {\n    \"Tag\": \"Managed Object: @{replace(split(body('Html_to_text'), 'Managed Objects:')[1], '\"', '')\r\n }\"\n  }\n]"
+                                                }
+                                            },
+                                            "path": "/Incidents/subscriptions/@{encodeURIComponent('YOUR_SUBSCRIPTION')}/resourceGroups/@{encodeURIComponent('YOUR_RESOURCEGROUPS')}/workspaces/@{encodeURIComponent('YOUR_WORKSPACE')}"
+                                        },
+                                        "operationOptions": "DisableAsyncPattern, DisableAutomaticDecompression"
+                                    },
+                                    "Compose": {
+                                        "type": "Compose",
+                                        "inputs": "@triggerBody()?['body']"
+                                    },
+                                    "Html_to_text": {
+                                        "runAfter": {
+                                            "Convert_Html_To_Text": [
+                                                "Succeeded"
+                                            ]
+                                        },
+                                        "type": "ApiConnection",
+                                        "inputs": {
+                                            "host": {
+                                                "connection": {
+                                                    "name": "@parameters('$connections')['conversionservice']['connectionId']"
+                                                }
+                                            },
+                                            "method": "post",
+                                            "body": "<p class=\"editor-paragraph\">@{triggerBody()?['body']}</p>",
+                                            "path": "/html2text"
+                                        }
+                                    }
+                                }
+                            },
+                            "expression": {
+                                "and": [
+                                    {
+                                        "greater": [
+                                            "@length(body('Get_emails_(V3)')?['value'])",
+                                            0
+                                        ]
+                                    }
+                                ]
+                            },
+                            "type": "If"
+                        }
+                    }
+                },
+                "expression": {
+                    "and": [
+                        {
+                            "endsWith": [
+                                "@triggerBody()?['subject']",
+                                "done"
+                            ]
+                        }
+                    ]
+                },
+                "type": "If"
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": {
+                "type": "Object",
+                "defaultValue": {}
+            }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "type": "Object",
+            "value": {
+                "office365": {
+                    "connectionId": "[resourceId('Microsoft.Web/connections', variables('Office365ConnectionName'))]",
+                     "connectionName": "[variables('Office365ConnectionName')]",
+                      "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/office365')]"
+                },
+                "azuresentinel": {
+                    "connectionId": "[resourceId('Microsoft.Web/connections', variables('SentinelConnectionName'))]",
+                    "connectionName": "[variables('SentinelConnectionName')]",
+                     "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/Sentinel')]"
+                    "connectionProperties": {
+                        "authentication": {
+                            "type": "ManagedServiceIdentity"
+                        }
+                    }
+                },
+                "conversionservice": {
+                    "connectionId": "[resourceId('Microsoft.Web/connections', variables('ServiceConnectionName'))]",
+                    "connectionName": "[variables('ServiceConnectionName')]",
+                    "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/Service')]"
+                },
+                "azuresentinel": {
+                    "connectionId": "[resourceId('Microsoft.Web/connections', variables('SentinelConnectionName'))]",
+                    "connectionName": "[variables('SentinelConnectionName')]",
+                     "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/Sentinel')]"
+                    "connectionProperties": {
+                        "authentication": {
+                            "type": "ManagedServiceIdentity"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
